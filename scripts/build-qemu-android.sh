@@ -1,61 +1,46 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="$ROOT/.android-qemu"
-OUT="$ROOT/app/src/main/assets/qemu"
+QEMU_REF="${QEMU_REF:-v10.2.0}"
 
-echo "=== ibaut ARM64 QEMU build ==="
+echo "======================================"
+echo " ibaut ARM64 QEMU build"
+echo "======================================"
 
-mkdir -p "$WORK"
-mkdir -p "$OUT"
+rm -rf qemu-src
 
-cd "$WORK"
+echo "Cloning QEMU ${QEMU_REF}..."
 
-if [ ! -d "qemu" ]; then
-    git clone --depth 1 \
-      https://github.com/aarch64-android-emulator/aarch64-qemu.git \
-      qemu
-fi
+git clone \
+  --depth 1 \
+  --branch "$QEMU_REF" \
+  https://gitlab.com/qemu-project/qemu.git \
+  qemu-src
 
-cd qemu
+cd qemu-src
 
-echo "Preparing Android QEMU..."
+echo "Configuring QEMU..."
 
-if [ -f "./android/rebuild.sh" ]; then
-    chmod +x ./android/rebuild.sh
+./configure \
+  --target-list=aarch64-softmmu \
+  --disable-werror \
+  --enable-pie
 
-    ./android/rebuild.sh \
-        --out-dir="$WORK/objs"
-else
-    echo "ERROR: Android QEMU rebuild.sh was not found."
-    exit 1
-fi
+echo "Building QEMU..."
 
-echo "Searching for qemu-system-aarch64..."
+ninja -C build qemu-system-aarch64
 
-QEMU="$(find "$WORK/objs" \
-    -type f \
-    -name 'qemu-system-aarch64' \
-    | head -n 1)"
+echo "Installing QEMU..."
 
-if [ -z "$QEMU" ]; then
-    echo "ERROR: qemu-system-aarch64 was not built."
-    find "$WORK/objs" -type f -name 'qemu-system-*' || true
-    exit 1
-fi
+mkdir -p ../app/src/main/jniLibs/arm64-v8a
 
-echo "Found:"
-echo "$QEMU"
+cp \
+  build/qemu-system-aarch64 \
+  ../app/src/main/jniLibs/arm64-v8a/qemu-system-aarch64
 
-rm -f "$OUT/qemu-system-aarch64"
+echo "======================================"
+echo " QEMU build completed"
+echo "======================================"
 
-cp "$QEMU" "$OUT/qemu-system-aarch64"
-
-chmod 755 "$OUT/qemu-system-aarch64"
-
-echo
-echo "QEMU installed into:"
-echo "$OUT/qemu-system-aarch64"
-
-ls -lh "$OUT/qemu-system-aarch64"
+file ../app/src/main/jniLibs/arm64-v8a/qemu-system-aarch64
+ls -lh ../app/src/main/jniLibs/arm64-v8a/qemu-system-aarch64
