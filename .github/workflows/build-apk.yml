@@ -1,35 +1,185 @@
-- name: Build Android QEMU
-  shell: bash
-  run: |
-    set -euxo pipefail
+name: Build ibaut S10+ Emulator
 
-    cd android-qemu
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
-    echo "===== SYSTEM ====="
-    uname -a
-    uname -m
-    lsb_release -a || true
+permissions:
+  contents: read
 
-    echo "===== TOOLS ====="
-    gcc --version || true
-    clang --version || true
-    cmake --version || true
-    ninja --version || true
-    python3 --version || true
-    make --version || true
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-24.04
 
-    echo "===== QEMU TREE ====="
-    ls -la
-    ls -la android || true
+    steps:
+      # ---------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
 
-    echo "===== CONFIGURE ====="
-    chmod +x android/configure.sh
-    chmod +x android/rebuild.sh
+      # ---------------------------------------------------------
+      # 2. Java
+      # ---------------------------------------------------------
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
 
-    ./android/configure.sh \
-      --out-dir="$PWD/objs"
+      # ---------------------------------------------------------
+      # 3. Android SDK
+      # ---------------------------------------------------------
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-    echo "===== BUILD ====="
-    ./android/rebuild.sh \
-      --out-dir="$PWD/objs" \
-      --verbose
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865" \
+            "cmake;3.31.6"
+
+      # ---------------------------------------------------------
+      # 4. Build tools
+      # ---------------------------------------------------------
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            ninja-build \
+            meson \
+            pkg-config \
+            python3 \
+            python3-pip \
+            python3-venv \
+            git \
+            curl \
+            unzip \
+            libglib2.0-dev \
+            libpixman-1-dev \
+            libfdt-dev \
+            libslirp-dev \
+            libcap-ng-dev \
+            libcap-dev \
+            libattr1-dev \
+            libaio-dev \
+            liburing-dev \
+            libepoxy-dev \
+            libdrm-dev \
+            libgbm-dev
+
+      # ---------------------------------------------------------
+      # 5. Show environment
+      # ---------------------------------------------------------
+      - name: Show build environment
+        run: |
+          echo "===== SYSTEM ====="
+          uname -a
+          uname -m
+
+          echo "===== JAVA ====="
+          java -version
+
+          echo "===== GCC ====="
+          gcc --version
+
+          echo "===== CLANG ====="
+          clang --version || true
+
+          echo "===== CMAKE ====="
+          cmake --version
+
+          echo "===== NINJA ====="
+          ninja --version
+
+          echo "===== MESON ====="
+          meson --version
+
+          echo "===== PYTHON ====="
+          python3 --version
+
+          echo "===== ANDROID ====="
+          echo "$ANDROID_HOME"
+
+      # ---------------------------------------------------------
+      # 6. Make scripts executable
+      # ---------------------------------------------------------
+      - name: Make build scripts executable
+        run: |
+          chmod +x scripts/*.sh || true
+
+      # ---------------------------------------------------------
+      # 7. Build QEMU
+      # ---------------------------------------------------------
+      - name: Build QEMU
+        env:
+          QEMU_REF: v10.2.0
+        run: |
+          set -euxo pipefail
+
+          bash scripts/build-qemu-android.sh
+
+      # ---------------------------------------------------------
+      # 8. Verify QEMU output
+      # ---------------------------------------------------------
+      - name: Verify QEMU
+        run: |
+          set -eux
+
+          echo "===== QEMU OUTPUT ====="
+
+          find app/src/main/jniLibs -type f -maxdepth 5 -print || true
+
+          if [ ! -f "app/src/main/jniLibs/arm64-v8a/qemu-system-aarch64" ]; then
+            echo "ERROR: QEMU executable was not created."
+            exit 1
+          fi
+
+          file app/src/main/jniLibs/arm64-v8a/qemu-system-aarch64
+          ls -lh app/src/main/jniLibs/arm64-v8a/qemu-system-aarch64
+
+      # ---------------------------------------------------------
+      # 9. Set up Gradle
+      # ---------------------------------------------------------
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      # ---------------------------------------------------------
+      # 10. Build APK
+      # ---------------------------------------------------------
+      - name: Build Debug APK
+        run: |
+          gradle :app:assembleDebug --no-daemon --stacktrace
+
+      # ---------------------------------------------------------
+      # 11. Show APK
+      # ---------------------------------------------------------
+      - name: Show APK
+        run: |
+          find app/build/outputs/apk -type f -name "*.apk" -print
+
+      # ---------------------------------------------------------
+      # 12. Upload APK
+      # ---------------------------------------------------------
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ibaut-s10-emulator-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
